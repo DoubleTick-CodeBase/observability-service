@@ -1,1 +1,1 @@
-# logs-service
+# observability-service

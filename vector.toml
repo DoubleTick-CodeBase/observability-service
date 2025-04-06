@@ -1,0 +1,74 @@
+[api]
+enabled = true
+
+[sources.docker]
+type = "docker_logs"
+include_containers = ["auth-service"]
+exclude_containers = ["logs-collector"]
+
+[transforms.decode_json]
+type = "remap"
+inputs = ["docker"]
+source = '''
+if is_string(.message) {
+  .parsed, err = parse_json(.message)
+
+  if err == null {
+    # Core fields
+    .ts, err = parse_timestamp(.parsed.timestamp, "%Y-%m-%dT%H:%M:%S%.3fZ")
+    .timestamp, err = if err == null {
+        format_timestamp(.ts, "%Y-%m-%d %H:%M:%S%.3f")
+    } else {
+        now()
+    }
+    .level = .parsed.level
+    .service = .parsed.service
+    .requestId = .parsed.requestId
+    .message = .parsed.message
+    .operation = .parsed.operation
+    .method = .parsed.method
+
+    # Duration and status
+    .durationMs, err = to_int(.parsed.durationMs)
+    if err != null { .durationMs = 0 }
+
+    .status, err = to_int(.parsed.status)
+    if err != null { .status = 0 }
+
+    # Auth fields
+    .email = .parsed.email
+    .authId = .parsed.authId
+
+    # Error fields
+    .error = .parsed.error
+    .stack = .parsed.stack
+  }
+}
+
+# Container metadata
+.container_id = .container_id
+.container_name = .container_name
+
+# Clean up
+del(.parsed)
+'''
+
+[sinks.clickhouse]
+type = "clickhouse"
+inputs = ["decode_json"]
+endpoint = "http://clickhouse:8123"
+database = "service_logs"
+table = "logs"
+skip_unknown_fields = true
+compression = "gzip"
+
+[sinks.clickhouse.auth]
+strategy = "basic"
+user = "${CLICKHOUSE_USER}"
+password = "${CLICKHOUSE_PASSWORD}"
+
+[sinks.console]
+type = "console"
+inputs = ["docker"]
+target = "stdout"
+encoding.codec = "json"

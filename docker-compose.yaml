@@ -1,0 +1,67 @@
+services:
+  vector:
+    image: timberio/vector:0.34.0-alpine
+    container_name: logs-collector
+    volumes:
+      - ./vector.toml:/etc/vector/vector.toml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: ["--config", "/etc/vector/vector.toml"]
+    networks:
+      - microservice-network
+    restart: unless-stopped
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:23.8
+    container_name: logs-storage
+    ports:
+      - "${http_port:-8123}:8123"
+      - "${native_port:-9000}:9000"
+    volumes:
+      - ${CLICKHOUSE_VOLUME:-clickhouse_data}:/var/lib/clickhouse
+      - ./initdb.d:/docker-entrypoint-initdb.d
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-username}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-password}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    networks:
+      - microservice-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "clickhouse-client --query 'SELECT 1'"]
+      interval: 5s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+
+  grafana:
+    image: grafana/grafana:10.1.5
+    container_name: logs-visualizer
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    volumes:
+      - ${GRAFANA_VOLUME:-grafana_data}:/var/lib/grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD:-admin}
+      GF_INSTALL_PLUGINS: grafana-clickhouse-datasource
+    networks:
+      - microservice-network
+    restart: unless-stopped
+    depends_on:
+      - clickhouse
+
+volumes:
+  clickhouse_data:
+  grafana_data:
+
+networks:
+  microservice-network:
+    external: true
